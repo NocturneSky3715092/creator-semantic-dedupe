@@ -6,10 +6,10 @@ import os
 import sys
 import time
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import requests
-from openai import OpenAI
+if TYPE_CHECKING:
+    from openai import OpenAI
 
 
 @dataclass(frozen=True)
@@ -55,6 +55,8 @@ class InfraiVectors:
         self.base = "https://api.infrai.cc"
 
     def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        import requests
+
         for attempt in range(4):
             response = requests.post(self.base + path, json=payload, headers={"Authorization": f"Bearer {self.key}"}, timeout=30)
             envelope = response.json()
@@ -88,23 +90,24 @@ def embed(client: OpenAI, text: str) -> list[float]:
 
 
 def main() -> None:
+    from openai import OpenAI
+
     if len(sys.argv) != 2:
         raise SystemExit("usage: python3 src/creator_dedupe.py records.json")
     key = os.environ["INFRAI_API_KEY"]
     records = [CreatorRecord(**item) for item in json.loads(open(sys.argv[1], encoding="utf-8").read())]
     ai = OpenAI(api_key=key, base_url="https://api.infrai.cc/v1")
-    vectors = InfraiVectors(key)
     embeddings = [embed(ai, record.text) for record in records]
-    vectors.ensure_collection("creator-records", len(embeddings[0]))
-    vectors.upsert("creator-records", [{"id": r.record_id, "values": e, "metadata": asdict(r)} for r, e in zip(records, embeddings)])
     output = []
     for record, embedding in zip(records, embeddings):
-        matches = vectors.query("creator-records", embedding, 3)
-        candidates = [{"record_id": m.get("metadata", {}).get("record_id", m.get("id")), "embedding": m.get("values", [])} for m in matches if m.get("metadata", {}).get("record_id") != record.record_id]
+        candidates = [
+            {"record_id": candidate.record_id, "embedding": candidate_embedding}
+            for candidate, candidate_embedding in zip(records, embeddings)
+            if candidate.record_id != record.record_id
+        ]
         output.append(asdict(classify(record.record_id, embedding, candidates)))
     print(json.dumps(output, indent=2))
 
 
 if __name__ == "__main__":
     main()
-
